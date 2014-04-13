@@ -1,0 +1,266 @@
+file_dir <- "D:/Dropbox/Dropbox (Dimagi)/R analysis/visit_table"
+filelist <- dir(file_dir, pattern = ".csv", recursive = TRUE, all.files = TRUE, full.names = TRUE)
+filelist # THIS RETURNS A LIST OF ALL VISIT TABLES FOR EVERY DOMAIN
+v <- lapply(filelist, read.csv) # THIS IMPORTS ALL VISIT TABLES INTO A LIST. USE LAPPLY TO SPLITE EVERY VISIT TABLE INTO FLW MONTHLY TABLES
+filename <- vector()
+for (i in seq_along(filelist)) {
+	filename[i] <- gsub(".csv", "", basename(filelist[i]))
+} # extracts filenames from full filepath
+filename <- as.numeric(gsub("domain_", "", filename))
+v.split <- lapply(v, function(x) {
+	x.split <- split(x, x$flwid)
+	return(x.split)
+}) # this splits visit tables of each domain into tables for each flw
+for (i in seq_along(v.split)) {
+	for (j in seq_along(v.split[[i]])) {
+		filename <- paste(names(v.split[[i]][j]), sep = "", ".csv")
+		write.csv(v.split[[i]][[j]], filename)
+	}
+} 	# this returns visit tables for every single flw
+	# exported files are saved in the director: D:/Dropbox/Dropbox (Dimagi)/Dimagi/R analysis/visit_per_flw
+
+file_dir <- "D:/Dropbox/Dropbox (Dimagi)/R analysis/visit_per_flw"
+filelist <- dir(file_dir, pattern = ".csv", recursive = TRUE, all.files = TRUE, full.names = TRUE)
+length(filelist)
+flwlist <- lapply(filelist, read.csv) # READ IN ALL FLW DATA TABLE INTO A LIST
+flw_full <- unlist(sapply(flwlist, function(x) unique(x$flwid))) 
+flw_rm_index <- which(flw_full %in% merged$flwid[rm_index]) # this returns the flw index that have 0 completed calendar month (to be removed)
+flwlist1 <- flwlist[-flw_rm_index] # this removes flws with 0 completed calendar months
+
+flwlist1 <- lapply(flwlist1, function(x) {
+	arrange(x, first_form_start)	
+	x$visit_date <- as.Date(strptime(x$visit_date, format = "%Y-%m-%d"))
+	x$bar1 <- as.Date(timeFirstDayInMonth(as.character(x$visit_date), format = "%Y-%m-%d"))
+	x$bar2 <- as.Date(timeLastDayInMonth(as.character(x$visit_date), format = "%Y-%m-%d"))
+	x$new_case <- ifelse(is.na(x$days_elapse_case) == TRUE, 1, 0)
+	x$follow_up <- ifelse(is.na(x$days_elapse_case) == FALSE, 1, 0) # VISITS TO A REGISTERED CASE
+	return(x)
+}) # SORT VISITS OF EVERY DF (AKA EVERY FLW) BY THE START TIME OF THEIR FIRST FORM
+# head(flwlist1[[1]])
+
+m <- lapply(flwlist1, function(x){
+	x$follow_up <- ifelse(is.na(x$days_elapse_case) == FALSE, 1, 0) # VISITS TO A REGISTERED CASE
+	y1 <- aggregate(follow_up~month.index, data = x, sum) # FOLLOW_UP VISITS PER MONTH (NOTE: MULTIPLE FOLLOWUPS TO ONE GIVEN CASE IS POSSIBLE THUS FOLLOW_UP VISITS != UNIQUE CASES BEING FOLLOWED UP)
+	names(y1) <- c("month.index", "follow_up_visits")
+	# GET THE NUMBER OF REGISTERED CASES PER MONTH
+	x$new_case <- ifelse(is.na(x$days_elapse_case) == TRUE, 1, 0)
+	y2 <- ddply(x, .(month.index), function(x) length(unique(x[x$follow_up == 1, ]$caseid)))
+	names(y2) <- c("month.index", "follow_up_unique_case") # THIS COUNTS MULTIPLE FOLLOWUP VISITS TO A SAME CASE AS 1
+	t1 <- as.data.frame(table(x$new_case, x$month.index))
+	names(t1) <- c("new_case", "month.index", "count")
+	t2 <- ddply(t1, .(month.index), function(x) sum(x[x$new_case == 1, ]$count)) # THIS RETURNS ALL CASES OPENED PER MONTH
+	names(t2) <- c("month.index", "case_opened_this_month")
+	merge_me <- list(y1, y2, t2)
+	y3 <- Reduce(function(...) merge(..., all=T), merge_me)
+	y3 <- arrange(y3, as.yearmon(y3$month.index))
+	y3$cum_open_cases <- cumsum(y3$case_opened_this_month)
+	y3$case_followup_rate <- paste(round(100*y3$follow_up_unique_case/y3$cum_open_cases, 2), "%", sep = "") # MIGHT BE INF WHEN THE FLW ONLY VISITS SHARED CASES NOT OPENED BY HER
+	y3$flwid <- x$flwid[1] # PASTE FLWID TO MONTHLY TABLE 
+	y3$domain.index <- rep(x$domain.index[1], nrow(y3))
+	return(y3)
+})
+
+m1 <- lapply(flwlist1, function(x){
+	y1 <- as.data.frame(table(x$month.index))
+	names(y1) <- c("month.index", "visits") # VISITS PER MONTH
+	# y1 <- y1[which(y1$visits != 0),]
+	y2 <- aggregate(x$forms_per_visit~x$month.index, data = x, sum)
+	names(y2) <- c("month.index", "nforms_per_month") # FORMS SUBMITTED PER MONTH
+	y3 <- aggregate(x$visit_date, list(x$month.index), function(x) length(unique(x)))
+	names(y3) <- c("month.index", "active_days_per_month") # DAYS WITH VISITS PER MONTH
+	y3$active_days_percent <- paste(round(100*y3$active_days_per_month/30, 2), "%", sep = "") # ACTIVE_DAYS_PERCENTAGE
+	y4 <- aggregate(visit_date~month.index, data = x, min)
+	names(y4) <- c("month.index", "first_visit_date") # FIRST_ACTIVE_DAY IN A GIVEN MONTH
+	y5 <- aggregate(visit_date~month.index, data = x, max)
+	names(y5) <- c("month.index", "last_visit_date") # LAST_ACTIVE_DAY IN A GIVEN MONTH
+	y5$days_on_cc <- as.numeric(y5$last_visit_date - y4$first_visit_date) + 1 # DAYS ON CC (FIRST_ACTIVE_DAY ~ LAST_ACTIVE_DAY) IN A GIVEN MONTH
+	y6 <- aggregate(morning~month.index, data = x, sum)
+	y6$morning_percent <- paste(round(100*y6$morning/y1$visits, 2), "%", sep = "") # MORNING VISITS/TOTAL VISITS PER MONTH
+	y7 <- aggregate(afternoon~month.index, data = x, sum)
+	y7$afternoon_percent <- paste(round(100*y7$afternoon/y1$visits, 2), "%", sep = "") # AFTERNOON VISITS/TOTAL VISITS PER MONTH
+	y8 <- aggregate(evening~month.index, data = x, sum)
+	y8$evening_percent <- paste(round(100*y8$evening/y1$visits, 2), "%", sep = "") # EVENING VISITS/TOTAL VISITS PER MONTH
+	y9 <- aggregate(after_midnight~month.index, data = x, sum)
+	y9$midnight_percent <- paste(round(100*y9$after_midnight/y1$visits, 2), "%", sep = "") # MIDNIGHT VISITS/TOTAL VISITS PER MONTH
+	y10 <- aggregate(batch_entry~month.index, data = x, sum, na.action = na.pass)
+	y10$batch_entry_percent <- paste(round(100*y10$batch_entry/y1$visits, 2), "%", sep = "") # BATCH ENTRY VISITS/TOTAL VISITS PER MONTH
+	tot_new_case <- length(which(x$new_case == 1)) # TOTAL REGISTERED CASES
+	y11 <- aggregate(new_case~month.index, data = x, sum)
+	y11$new_case_percent <- paste(round(100*y11$new_case/tot_new_case, 2), "%", sep = "") # OPENED CASE/REGISTERED CASE
+	y12 <- aggregate(follow_up~month.index, data = x, sum) # FOLLOW_UP VISITS PER MONTH (NOTE: MULTIPLE FOLLOWUPS TO ONE GIVEN CASE IS POSSIBLE THUS FOLLOW_UP VISITS != UNIQUE CASES BEING FOLLOWED UP)
+	names(y12) <- c("month.index", "follow_up_visits_per_month")
+	merge_me <- list(y1, y2, y3, y4, y5, y6, y7, y8, y9, y10, y11, y12)
+	y13 <- Reduce(function(...) merge(..., all=T), merge_me)
+	y13$domain.index <- rep(x$domain.index[1], nrow(y13))
+	return(y13)
+})
+
+m2 <- lapply(flwlist1, function(x){
+	y1 <- as.data.frame(table(x$visit_date))
+	names(y1) <- c("active_date", "nvisits")
+	y1$month.index <- as.factor(as.yearmon(y1$active_date))
+	y2 <- aggregate(nvisits~month.index, data = y1, median)
+	names(y2) <- c("month.index", "median_visits_per_active_day")
+	y3 <- aggregate(tot_duration~month.index, data = x, median)
+	y3 <- rename(y3, replace = c("tot_duration" = "median_visit_duration"))
+	y3$median_visit_duration <- round(y3$median_visit_duration/60, 2)
+	merge_me <- list(y2, y3)
+	y4 <- Reduce(function(...) merge(..., all=T), merge_me)
+	y4$domain.index <- rep(x$domain.index[1], nrow(y4))
+	return(y4)
+})
+
+m3 <- lapply(flwlist1, function(x){
+	y1 <- aggregate(follow_up~month.index, data = x, sum) # FOLLOW_UP VISITS PER MONTH (NOTE: MULTIPLE FOLLOWUPS TO ONE GIVEN CASE IS POSSIBLE THUS FOLLOW_UP VISITS != UNIQUE CASES BEING FOLLOWED UP)
+	names(y1) <- c("month.index", "follow_up_visits")
+	y2 <- ddply(x, .(month.index), function(x) length(unique(x[x$follow_up == 1, ]$caseid)))
+	names(y2) <- c("month.index", "follow_up_unique_case")
+	# # GET THE NUMBER OF REGISTERED CASES PER MONTH
+	t1 <- as.data.frame(table(x$new_case, x$month.index), stringsAsFactors = FALSE)
+	names(t1) <- c("new_case_or_not", "month.index", "new_case_count")
+	t2 <- t1[which(t1$new_case_or_not == 1), ] # POSSIBLE THAT SOME FLW WOULD HAVE NO DATA LEFT HERE
+	merge_me <- list(y1, y2, t2)
+	y3 <- Reduce(function(...) merge(..., all=T), merge_me)
+	y3 <- arrange(y3, as.yearmon(y3$month.index))
+	y3$cum_open_cases <- cumsum(y3$new_case_count)
+	y3$case_followup_rate <- paste(round(100*y3$follow_up_unique_case/y3$cum_open_cases, 2), "%", sep = "") # PERCENTAGE MIGHT > 1 WHEN FLWS FOLLOW UP WITH VISITS REMOVED IN INCOMPLETE CALENDAR MONTH
+	y3$new_case_or_not <- NULL
+	y3$domain.index <- rep(x$domain.index[1], nrow(y3))
+	# y3$new_case <- as.character(y3$new_case)
+	return(y3)
+})
+head(m[[1]]); head(m1[[1]]); head(m2[[1]]); head(m3[[1]])
+# MERGE  
+M <- list()
+merge_me <- list()
+mergeMe <- function(x1, x2, x3, x4){
+	for (i in seq_along(x1)) {
+		merge_me[[i]] <- list(x1[[i]], x2[[i]], x3[[i]], x4[[i]])
+		M[[i]] <- Reduce(function(...) merge(..., all = T), merge_me[[i]])
+	}
+	return(M)
+}
+mergeMe(m, m1, m2, m3) -> monthly_table # NOT EXCLUDING ANY FLW
+
+# # REMOVE INCOMPLETE CALENDAR MONTHS FOR EVERY FLW
+monthly_table <- llply(monthly_table, function(x) arrange(x, as.yearmon(month.index)))
+mt_1 <- lapply(monthly_table, function(x) {
+	x$month_begin <- as.Date(timeFirstDayInMonth(as.character(x$first_visit_date), format = "%Y-%m-%d"))
+	x$month_end <- as.Date(timeLastDayInMonth(as.character(x$first_visit_date), format = "%Y-%m-%d"))
+	if (as.Date(x$first_visit_date[1]) > x$month_begin[1]) {
+			x <- x[-1, ]
+	}
+	return(x)
+})
+sapply(mt_1, function(x) nrow(x)) -> temp1
+mt_2 <- mt_1
+mt_2[which(temp1 %in% 0)] <- NULL # if which(temp1 == 0) returns integer(0), mt_2[-(temp1 == 0)] would return an empty list
+
+mt_3 <- lapply(mt_2, function(x) { 
+	if (as.Date(tail(x$last_visit_date, n = 1)) < tail(x$month_end, n = 1)) {
+		x <- x[-nrow(x), ]		
+	}
+	return(x) # this removes incomplete calendar month end
+})
+sapply(mt_3, function(x) nrow(x)) -> temp2
+length(which(temp2 == 0))
+mt_4 <- mt_3
+mt_4[which(temp2 %in% 0)] <- NULL # which(temp2 == 0) -> to_remove2 would be enough if temp2 > 0 but we don't know if we run everything in one go
+merged_monthly_table <- do.call("rbind", mt_4)
+length(unique(merged_monthly_table$flwid))
+write.csv(mt_4, "merged_monthly_table.csv")
+# Also generate merged_3 flw table which keeps only flws with complete calendar start&end month only 
+temp3 <- unique(merged_monthly_table$flwid)
+merged_3 <- merged_2[which(merged_2$flwid %in% temp3), ]
+write.csv(merged_3, "lifetime_merged_3.csv")
+
+# ADD OUTCOME INDICATORS: ACTIVITY OF A GIVEN FLW IN N+1/N+3 /N+5 MONTHS
+	## generate regular sequences of months between calendar_start and calendar_end months for a given flw
+	## can also use union() & intersection() in package zoo
+mt_5 <- lapply(mt_4, function(x) {
+	st <- x$month_begin[1]
+	en <- tail(x$month_end, n = 1)
+	month_seq <- as.yearmon(seq.Date(from = st, to = en, by = "1 month"))
+	# return(month_seq)
+	ls <- month_seq[-which(month_seq %in% as.yearmon(x$month.index))] # this returns the list of months in which a given flw has no form submission = inactive
+	temp <- matrix(nrow = length(ls), ncol = length(x))
+	temp <- data.frame(temp)
+	colnames(temp) <- colnames(x)
+	x <- rbind(x, temp)
+	x$month.index <- as.yearmon(x$month.index)
+	x$month.index[which(is.na(x$month.index))] <- ls
+	x$flwid[which(is.na(x$flwid))] <- x$flwid[1]
+	x$domain.index[which(is.na(x$domain.index))] <- x$domain.index[1]
+	x <- x[order(x$month.index), ]
+	return(x)
+})
+
+	## generate n+x indicators
+setwd("D:/Dropbox/Dropbox (Dimagi)/R analysis/tables/monthly_table")
+file_dir <- ("D:/Dropbox/Dropbox (Dimagi)/R analysis/tables/monthly_table")
+filelist <- dir(file_dir, pattern = ".csv", recursive = TRUE, all.files = TRUE, full.names = TRUE)
+mt <- lapply(filelist, read.csv)
+sapply(mt, function(x) nrow(x)) -> cat
+mt_6 <- lapply(mt, function(x) {
+	x$outcome1 <- x$outcome2 <- x$outcome3 <- c(rep(NA, nrow(x))) # default to be NA
+	return(x)
+})
+mt_sub1 <- mt_6[which(cat %in% 1)] # this returns all flws with only one complete calendar month in their lifecycle
+mt_sub2 <- mt_6[which(cat %in% c(2:3))]
+mt_sub3 <- mt_6[which(cat %in% c(4:5))]
+mt_sub4 <- mt_6[which(cat >= 6)]
+mt_sub2 <- lapply(mt_sub2, function(x) {
+	for (i in 2:nrow(x)) {
+		if (is.na(x$nforms_per_month[i])) 
+			x$outcome1[i-1] <- 0
+		else
+			x$outcome1[i-1] <- 1
+		}
+		return(x)
+})
+mt_sub3 <- lapply(mt_sub3, function(x) {
+	for (i in 2:nrow(x)) {
+		if (is.na(x$nforms_per_month[i])) 
+			x$outcome1[i-1] <- 0
+		else
+			x$outcome1[i-1] <- 1
+	}	
+	for (i in 4:nrow(x)) {
+		if (is.na(x$nforms_per_month[i])) 
+			x$outcome2[i-3] <- 0
+		else
+			x$outcome2[i-3] <- 1
+	}
+	return(x)
+})
+mt_sub4 <- lapply(mt_sub4, function(x) {
+	for (i in 2:nrow(x)) {
+		if (is.na(x$nforms_per_month[i])) 
+			x$outcome1[i-1] <- 0
+		else
+			x$outcome1[i-1] <- 1
+	}	
+	for (i in 4:nrow(x)) {
+		if (is.na(x$nforms_per_month[i])) 
+			x$outcome2[i-3] <- 0
+		else
+			x$outcome2[i-3] <- 1
+	}
+	for (i in 6:nrow(x)) {
+		if (is.na(x$nforms_per_month[i]))
+			x$outcome3[i-5] <- 0
+		else 
+			x$outcome3[i-5] <- 1
+	}
+	return(x)
+})
+monthlyOut <- function(x) {
+	for (i in seq_along(x)) {
+	filename = paste(x[[i]]$flwid[1], sep = "", ".csv")
+	write.csv(x[[i]], filename)
+	}
+}
+monthlyOut(mt_sub1)
+monthlyOut(mt_sub2)
+monthlyOut(mt_sub3)
+monthlyOut(mt_sub4)
