@@ -1,0 +1,347 @@
+library(timeDate)
+library(gdata)
+library(plyr)
+library(zoo)
+
+setwd("D:/Dropbox/Dropbox (Dimagi)/R analysis")
+file_dir <- "D:/Dropbox/Dropbox (Dimagi)/R analysis/Data/metadata_export" # should write a function to convert all excel files to csv
+filelist <- dir(file_dir, pattern = "form.raw.csv", recursive = TRUE, all.files = TRUE, full.names = TRUE) # form.raw already excluded demo_users etc
+f <- lapply(filelist, read.csv)
+ls <- c(1,3,5,9,11,12,13,15,16,17,18,23,26,28,31) # exclude unnecessary fields 
+for (i in seq_along(f)) {
+	names(f)[i] <- paste("domain_", sep = "", i)
+	f[[i]]$domain.index <- rep(i, nrow(f[[i]]))
+}
+for (i in seq_along(ls)) {
+	f[[ls[i]]] <- f[[ls[i]]][-8]
+}
+sapply(f, function(x) length(x)) # make sure columns match since data are exported at different time point
+f_merged <- do.call("rbind", f)
+remove <- read.csv("remove.csv", header = T)
+nrow(remove) # this returns unique flwid to be removed
+rm_list <- which(f_merged$flwid %in% remove$flwid) 
+length(rm_list) # this returns number of forms submitted by flwids to be removed
+f_merged_sub <- f_merged[-rm_list,] # remove admin/unknown users from all data frames
+to_rm <- which(as.numeric(format(as.Date(f_merged_sub$starttime), format = "%Y")) < 2010)  # indice is returned
+f_merged_sub <- f_merged_sub[-to_rm, ]
+form.raw <- f_merged_sub 
+form <- form.raw[form.raw$diff_year != 1 & form.raw$NegFormTime != 1 & form.raw$TimeMissing != 1 & form.raw$caseid != "" & form.raw$flwid != "" & form.raw$flwid != "demo_user", ]
+form$duration <- as.numeric(difftimeDate(as.timeDate(form$endtime), as.timeDate(form$starttime)), units = "secs")  # Create time duration variable only for those with ordinary metadata
+
+# build visit tables
+form$starttime <- format(form$starttime, format = "%Y-%m-%d %H:%M:%S")
+form$endtime <- format(form$endtime, format = "%Y-%m-%d %H:%M:%S")
+form$sdate <- as.Date(form$starttime)
+form.subset <- form[c("id", "domain", "flwid", "sdate", "caseid", "starttime", "endtime", "duration", "diff_day", "domain.index")] # REORDER FIELDS
+## break the merged dataframes into a list of data frames
+t <- dlply(form.subset, .(domain.index)) # this returns 32 separate data frames to operate on
+v0 <- lapply(t, function(x) {
+	y <- count(x, c("flwid", "sdate", "caseid"))
+	y.s1 <- y[order(y$flwid, y$sdate, y$caseid), ]
+	x.s1 <- x[order(x$flwid, x$starttime, x$caseid), ]
+	tot_duration <- aggregate(cbind(x.s1$duration) ~ x.s1$flwid + x.s1$sdate + x.s1$caseid, FUN = sum)
+	names(tot_duration) <- c("flwid", "sdate", "caseid", "tot_duration")
+	tot_duration.s <- tot_duration[order(tot_duration$flwid, tot_duration$sdate, tot_duration$caseid), ]
+	x.s2 <- x[order(x$flwid, x$sdate, x$caseid, x$starttime), ]
+	temp1 <- duplicated(x.s2[, 3:5])
+	temp2 <- duplicated(x.s2[, 3:5], fromLast = TRUE)
+	form.first <- x.s2[temp1 == FALSE, ] 
+	form.last <- x.s2[temp2 == FALSE, ]
+	form.fs <- form.first[order(form.first$flwid, form.first$sdate, form.first$caseid), ]
+	form.ls <- form.last[order(form.last$flwid, form.last$sdate, form.last$caseid), ]
+	v <- data.frame(y.s1, form.fs$starttime, form.ls$endtime, tot_duration.s$tot_duration)
+	names(v) <- c("flwid", "visit_date", "caseid", "forms_per_visit", "first_form_start", "last_form_end", "tot_duration") 	
+	v$first_form_start <- as.POSIXct(as.character(levels(v$first_form_start)), format = "%Y-%m-%d %H:%M:%S")[v$first_form_start]
+	v$last_form_end <- as.POSIXct(as.character(levels(v$last_form_end)), format = "%Y-%m-%d %H:%M:%S")[v$last_form_end]
+	return(v)	
+})
+
+for (i in seq_along(v0)) {
+	v0[[i]]$domain.index <- i 
+} # assign domain index 
+
+v1 <- lapply(v0, function(x) {
+	s1 <- x[order(x$flwid, x$first_form_start), ]
+	time1 <- tail(s1$first_form_start, -1) # THIS RETURNS ALL FORM START TIME EXCEPT THE FIRST ROW 
+	time2 <- head(s1$last_form_end, -1) # THIS RETURNS ALL FORM ENDTIME EXCEPT THE LAST ROW
+	s1$mins_elapse_flw <- c(NA, as.numeric(difftime(time1, time2, units = "mins"))) # THIS RETURNS ALL TIME DIFFERENCE IN MINUTES 
+	s1$mins_elapse_flw[which(diff(as.numeric(factor(s1$flwid, ordered = TRUE))) != 0) + 1] <- NA # EACH FLW'S FIRST VISIT SHOULD BE REPLACED WITH NA 
+	table(is.na(s1$mins_elapse_flw)) 
+	s2 <- x[order(x$caseid, x$first_form_start), ] # SORT VISIT TABLE BY CASE AND FIRST FORM START (MULTI VISITS COULD HAPPEN ON THE SAME DAY)
+	s2$days_elapse_case <- c(NA, as.numeric(diff(s2$visit_date, units = "days")))
+	s2$days_elapse_case[which(diff(as.numeric(factor(s2$caseid, ordered = TRUE))) != 0) + 1] <- NA 
+	v1 <- merge(s1, s2, by = c("flwid", "first_form_start", "caseid"))
+	v1 <- v1[, c(1:9, 15)]
+	colnames(v1)[4:8] <- c("visit_date", "forms_per_visit", "last_form_end", "tot_duration", "domain.index")
+	v1$month.index <- as.yearmon(v1$visit_date)
+	return(v1)
+}) # returning 11 indicators here
+
+v2 <- lapply(v1, function(x) {
+	nvisits.raw <- as.data.frame(table(x$flwid)) 
+	nvisits.raw <- nvisits.raw[order(nvisits.raw$Var1), ]
+	flw.rm <- nvisits.raw$Var1[which(nvisits.raw$Freq == 1)] # THIS RETURNS THE FLW ID WITH ONE VISIT IN THEIR WHOLE CC LIFECYCLE
+	x <- x[!x$flwid %in% flw.rm,] 
+	x <- x[order(x$flwid, x$first_form_start), ]
+	x$date_difference <- c(NA, diff(x$visit_date)) # this checks if sorted visits happen in the same or different days
+	x$date_difference[which(is.na(x$mins_elapse_flw))] <- NA
+	x$visit_weekday <- as.numeric(format(x$visit_date, "%w"))
+	x$batch_entry <- ifelse(x$date_difference == 0 & x$mins_elapse_flw < 10, 1, 0)
+	x$batch_entry[which(x$batch_entry == 1) - 1] <- 1 
+	x$nesting <- 0
+	x$nesting[which(x$mins_elapse_flw <= 0)] <- 1
+	x$nesting[which(x$nesting == 1) - 1] <- 1
+	x$time_ffs <- strftime(x$first_form_start, format = "%H:%M:%S")
+	x$morning <- ifelse(x$time_ffs >= "06:00:00" & x$time_ffs < "12:00:00", 1, 0)
+	x$afternoon <- ifelse(x$time_ffs >= "12:00:00" & x$time_ffs < "18:00:00", 1, 0)
+	x$evening <- ifelse(x$time_ffs >= "18:00:00" & x$time_ffs < "24:00:00", 1, 0)
+	x$after_midnight <- ifelse(x$time_ffs >= "00:00:00" & x$time_ffs < "06:00:00", 1, 0) 
+	x$visit_time <- ifelse(x$time_ffs >= "06:00:00" & x$time_ffs < "12:00:00", 1, 
+							ifelse(x$time_ffs >= "12:00:00" & x$time_ffs < "18:00:00", 2,
+								ifelse(x$time_ffs >= "18:00:00" & x$time_ffs < "24:00:00", 3, 4)))
+	return(x)
+})
+
+visitOut <- function(x) {
+	for (i in seq_along(x)) {
+	filename = paste("domain_", sep = "", i, ".csv")
+	write.csv(x[[i]], filename)
+	}
+}
+visitOut(v2) 
+
+# GENERATE FLW TABLES
+f0 <- lapply(v2, function(x) {
+	temp1 <- duplicated(x$flwid)
+	temp2 <- duplicated(x$flwid, fromLast = TRUE)
+	first.visit <- x[temp1 == FALSE, ]
+	last.visit <- x[temp2 == FALSE, ]
+	first.s <- first.visit[order(first.visit$flwid), ]
+	last.s <- last.visit[order(last.visit$flwid), ]
+	nvisits.raw <- as.data.frame(table(x$flwid)) 
+	nvisits <- subset(nvisits.raw, Freq != 0) # THIS RETURNS TOTAL VISITS PER FLW
+	nvisits <- nvisits[order(nvisits$Var1), ]
+	days_on_cc <- as.numeric(difftime(last.s$visit_date, first.s$visit_date, units = "days")) + 1 
+	days_visit_last <- as.numeric(difftime("2013-11-30", last.s$visit_date, units = "days"))
+	y <- data.frame(first.s$flwid, first.s$visit_date, last.s$visit_date, nvisits$Freq, days_on_cc, days_visit_last)
+	names(y) <- c("flwid", "date_first_visit", "date_last_visit", "nvisits", "days_on_cc", "days_visit_last")
+	y$active_user <- ifelse(y$days_visit_last <= 30, 1, 0) 
+	y$calendar_month_start <- as.Date(as.yearmon(y$date_first_visit) + 1/12, frac = 0)
+	y$calendar_month_end <- as.Date(as.yearmon(y$date_last_visit), frac = 0)
+	y$date_first_visit <- as.Date(strptime(y$date_first_visit, format = "%Y-%m-%d"))
+	y$date_last_visit <- as.Date(strptime(y$date_last_visit, format = "%Y-%m-%d"))
+	next.month <- function(d) as.Date(as.yearmon(d) + 1/12) + 
+	as.numeric(d - as.Date(as.yearmon(d)))
+	temp1 <- next.month(y$date_first_visit) # this returns the same Date in the following month
+	index1 <- which(temp1 == y$calendar_month_start)	# this returns the index of flws with a starting time on the first day in a month 
+	y$calendar_month_start[index1] <- as.Date(as.yearmon(y$calendar_month_start[index1]) - 1/12, frac = 0)
+	temp2 <- next.month(y$calendar_month_end)
+	index2 <- which(as.numeric(difftime(temp2, y$date_last_visit)) == 1) # this returns the index of flws who have a last_visit_date on the last day in a month
+	y$calendar_month_end[index2] <- as.Date(as.yearmon(y$calendar_month_end[index2]) + 1/12, frac = 0) # UPDATE CALENDA MONTH END FOR FLWS WITH A LAST VISIT DATE ON THE DAY ENDING THE MONTH
+	y$calendar_months_on_cc <- 12*(as.yearmon(y$calendar_month_end) - as.yearmon(y$calendar_month_start)) # REMOVE FLWS WITH AN MOC < 3 LATER WHEN WE ARE DONE WITH ALL COMPUTATION
+	y$calendar_months_on_cc <- ifelse(y$calendar_months_on_cc < 0, 0, y$calendar_months_on_cc)
+	activity <- as.data.frame(table(x$flwid, x$month.index))
+	activity.sub <- subset(activity, Freq != 0)
+	activity.count <- aggregate(activity.sub$Var2, list(activity.sub$Var1), function(x) length(unique(x)))
+	activity.count.s <- activity.count[order(activity.count$Group.1), ]
+	y$active_months <- activity.count.s$x # MIGHT BE ACTUALLY BIGGER THAN CALENDAR MONTH SINCE IT INCLUDES INCOMPLETE MONTHS
+	y$active_months <- y$active_months - 2 # DROP THE FIRST AND LAST MONTHS
+	y$active_months[index1] <- y$active_months[index1] + 1 # FOR THOSE FLWS WITH A DATE_FIRST_VISIT IN THE BEGINNING OF A MONTH
+	y$active_months[index2] <- y$active_months[index2] + 1 # FOR THOSE WITH A DATE_END_VISIT ON THE LAST DAY IN A MONTH
+	y$active_month_percent <- paste(round(100*y$active_months/y$calendar_months_on_cc, 2), "%", sep = "") # CAREFUL FOR THOSE WITH 0 COMPLETE CALENDAR MONTH
+	y$active_months <- ifelse(y$active_months < 0, 0, y$active_months)
+	# y$active_month_percent <- as.numeric(y$active_month_percent) # FOR THOSE ACTIVE FOR ONLY ONE MONTH IN THEIR ENTIRE LIFECYLE ON CC, THIS VALUE = -Inf / NA / NaN
+	y$substantial_user <- ifelse(y$calendar_months_on_cc > 3, 1, 0)
+	activity_by_day <- as.data.frame(table(x$flwid, x$visit_date))
+	activity_by_day.sub <- subset(activity_by_day, Freq != 0)
+	activity_by_day.count <- aggregate(activity_by_day.sub$Var2, list(activity_by_day.sub$Var1), function(x) length(unique(x)))
+	activity_by_day.count.s <- activity_by_day.count[order(activity_by_day.count$Group.1), ]
+	y$active_days <- activity_by_day.count.s$x
+	y$active_day_percent <- paste(round(100*y$active_days/y$days_on_cc, 2), "%", sep = "")
+	nforms <- aggregate(forms_per_visit~flwid, data = x, sum) 
+	nforms <- nforms[order(nforms$flwid), ]
+	y$nforms <- nforms$forms_per_visit
+	visit_duration <- aggregate(tot_duration ~ flwid, data = x, median) # MEDIAN TIME DURATION PER VISIT IN SECs
+	y$median_visit_duration <- round(visit_duration$tot_duration/60, 2) # in minutes
+	d <- as.data.frame(table(x$visit_date, x$flwid))
+	d.sub <- subset(d, Freq != 0)
+	d.sub.s <- d.sub[order(d.sub$Var2), ] # ORDER BY FLWID
+	d.median <- aggregate(d.sub.s$Freq, list(d.sub.s$Var2), median, na.rm = TRUE) 
+	y$median_visits_per_day <- d.median$x 
+	m <- as.data.frame(table(x$month.index, x$flwid))
+	m.sub <- subset(m, Freq != 0)
+	m.sub.s <- m.sub[order(m.sub$Var2), ]
+	m.median <- aggregate(m.sub.s$Freq, list(m.sub.s$Var2), median, na.rm = TRUE)
+	y$median_visits_per_month <- m.median$x
+	v <- x[order(x$flwid, x$first_form_start), ]
+	median_time_elapse <- with(v, aggregate(mins_elapse_flw, list(flwid), FUN = median, na.rm = TRUE))
+	mean_time_elapse <- with(v, aggregate(mins_elapse_flw, list(flwid), FUN = mean, na.rm = TRUE))
+	y$median_time_btw_visits <- median_time_elapse$x
+	y$mean_time_elapse_btw_visits <- mean_time_elapse$x
+	c <- x[order(x$flwid, x$caseid, x$first_form_start), ]
+	ct1 <- tail(c$first_form_start, -1)
+	ct2 <- head(c$last_form_end, -1)
+	c$mins_elapse_flw_same_case <- c(NA, as.numeric(difftime(ct1, ct2, units = "mins")))
+	c$mins_elapse_flw_same_case[which(diff(as.numeric(factor(c$flwid, ordered = TRUE))) != 0) + 1] <- NA # EACH FLW'S FIRST VISIT SHOULD BE REPLACED WITH NA
+	c$mins_elapse_flw_same_case[which(diff(as.numeric(factor(c$caseid, ordered = TRUE))) != 0) + 1] <- NA # EACH FLW'S FIRST VISIT TO A DIFFERENT CASE SHOULD ALSO BE REPLACED WITH NA
+	c1 <- with(c, aggregate(mins_elapse_flw_same_case, list(flwid, caseid), FUN = median, na.rm = TRUE)) # NA STILL EXISTS FOR CASES WITH 1 VISIT ONLY, NO FOLLOWUP
+	c2 <- aggregate(c1$x, list(c1$Group.1), median, na.rm = TRUE)
+	c3 <- aggregate(c1$x, list(c1$Group.1), mean, na.rm = TRUE)
+	c2 <- c2[order(c2$Group.1), ]
+	c3 <- c3[order(c3$Group.1), ]
+	y$median_time_btw_followup <- c2$x # IN MINUTES
+	y$median_days_btw_followup <- round(y$median_time_btw_followup/60/24, 2)
+	y$mean_time_btw_followup <- c3$x # IN MINUTES
+	y$mean_days_btw_followup <- format(y$mean_time_btw_followup/60/24, digits = 3) # IN DAYS
+	temp <- table(x$flwid, x$batch_entry) # THIS RETURNS COUNT OF BATCH/NON-BATCH ENTRIES PER FLW
+	t <- as.data.frame(margin.table(temp, 1))
+	temp <- temp[which(t$Freq != 0), ] 
+	be <- as.vector(temp[,2]) # THIS RETURNS THE NUMBER OF BATCH ENTRY VISITS OF EACH FLW
+	percent <- as.data.frame(prop.table(temp, 1)) # THIS GIVES THE PERCENTAGE OF BATCH & NON-BATCH ENTRY VISITS IN TOTAL VISITS OF AN FLW
+	be_percent <- as.vector(percent[,2])
+	y$batch_entry <- be
+	y$batch_entry_percent <- paste(round(100*be_percent, 2), "%", sep = "") # THIS EXCLUDES ALL FIRST VISITS BY FLW. SLIGHT DIFFERENCE IN PERCENTAGE IF CALCULATING IT USING NVISITS AS DENOMINATOR
+	y$median_days_btw_followup <- round(y$median_days_btw_followup, 2)
+	y$median_time_btw_visits <- round(y$median_time_btw_visits, 2)
+	y$mean_time_elapse_btw_visits <- round(y$mean_time_elapse_btw_visits, 2) # IN MINUTES
+
+	am_temp <- table(x$flwid, x$morning)
+	am <- as.data.frame(margin.table(am_temp, 1))
+	am_temp <- am_temp[which(am$Freq != 0), ]
+	am_visit <- as.vector(am_temp[, 2])
+	am_percent <- as.data.frame(prop.table(am_temp, 1))
+	y$am_visit <- am_visit
+	y$am_percent <- paste(round(100*as.vector(am_percent[,2]), 2), "%", sep = "")
+
+	pm_temp <- table(x$flwid, x$afternoon)
+	pm <- as.data.frame(margin.table(pm_temp, 1))
+	pm_temp <- pm_temp[which(pm$Freq != 0), ]
+	pm_visit <- as.vector(pm_temp[, 2])
+	pm_percent <- as.data.frame(prop.table(pm_temp, 1))
+	y$pm_visit <- pm_visit
+	y$pm_percent <- paste(round(100*as.vector(pm_percent[,2]), 2), "%", sep = "")
+
+	after_pm_temp <- table(x$flwid, x$evening)
+	after_pm <- as.data.frame(margin.table(after_pm_temp, 1))
+	after_pm_temp <- after_pm_temp[which(after_pm$Freq != 0), ]
+	after_pm_visit <- as.vector(after_pm_temp[, 2])
+	after_pm_percent <- as.data.frame(prop.table(after_pm_temp, 1))
+	y$after_pm_visit <- after_pm_visit
+	y$after_pm_percent <- paste(round(100*as.vector(after_pm_percent[,2]), 2), "%", sep = "")
+
+	y$after_midnight_visit <- y$nvisits - as.numeric(y$am_visit) - as.numeric(y$pm_visit) - as.numeric(y$after_pm_visit)
+	y$after_midnight_percent <- round(y$after_midnight_visit/y$nvisits, 2)
+	y$domain.index <- rep(x$domain.index[1], nrow(y))
+	return(y)
+})
+
+f1 <- lapply(f0, function(x) {
+	x$after_midnight_percent <- paste(round(100*x$after_midnight_visit/x$nvisits, 2), "%", sep = "")
+	x$days_visit_last <- round(x$days_visit_last)
+	x$median_visits_per_month <- round(x$median_visits_per_month)
+	x$median_days_btw_followup <- round(x$median_days_btw_followup)
+	return(x)	
+})
+
+# GENERATE CASE TABLES 
+c0 <- lapply(v2, function(x) {
+	freq <- as.data.frame(table(x$caseid)) # NUMBER OF VISITS ON EACH CASE
+	visit.freq <- subset(freq, Freq != 0) # REMOVE ALL UNUSED FACTOR LEVELS. THIS RETURNS #VISITS ON THE CASE (BY BOTH REGISTERING/NON-RE FLWs)
+	names(visit.freq) <- c("caseid", "tot_visits")
+	x.s <- x[order(x$caseid, x$first_form_start), ]
+	temp1 <- duplicated(x.s$caseid) # Logic statement: the first visit date to one case == FALSE
+	temp2 <- duplicated(x.s$caseid, fromLast = TRUE) # the last visit date to one case == FALSE
+	first <- x.s[temp1 == FALSE, ] # FLWID IN FIRST = THE REGISTERING FLW FOR THE CASE 
+	last <- x.s[temp2 == FALSE, ] # FLWID IN LAST MIGHT BE A NON-REGISTERING FLW
+	first <- first[order(first$caseid), ]; last <- last[order(last$caseid), ]
+	first_last <- as.numeric(difftime(last$visit_date, first$visit_date, units = "days")) # THIS RETURNS NUMBER OF DAYS BETWEEN FIRST AND LAST VISIT TO A CASE BY ANY FLW
+	vars <- c("flwid", "caseid", "visit_date")
+	ct1 <- cbind(first[, vars], last$visit_date, first_last)
+	names(ct1) <- c("register_flw", "caseid", "date_first_visit", "date_last_visit", "first_last")
+	ct1$caseid <- factor(ct1$caseid)
+	crosstab <- as.data.frame(table(x$caseid, x$flwid))
+	freq_per_flw <- subset(crosstab, Freq > 0) # DROP UNUSED FACTOR LEVELS
+	names(freq_per_flw) <- c("caseid", "visit_flw", "Freq") # THIS RETURNS NUMBER OF VISITS BY EACH FLW TO A GIVEN CASE
+	freq_per_flw$caseid <- factor(freq_per_flw$caseid)
+	freq_per_flw$visit_flw <- factor(freq_per_flw$visit_flw)
+	freq_per_flw <- freq_per_flw[order(freq_per_flw$caseid), ]
+	ct2 <- merge(ct1, freq_per_flw, by = "caseid", all = TRUE)
+	ct3 <- ct2[which(ct2$register_flw == ct2$visit_flw), ] # THIS REMOVES ALL NON-REGISTERING FLWS' FOLLOW UP VISITS TO A GIVEN CASE
+	colnames(ct3)[7] <- c("tot_visits_register_flw")
+	ct3$register_followup <- ifelse(ct3$tot_visits_register_flw > 1, 1, 0) # DUMMY INDICATING IF AN FLW IS FOLLOWING UP WITH CASES SHE HAS REGISTERED
+	visit_flws <- as.data.frame(table(freq_per_flw$caseid))
+	visit_flws <- visit_flws[which(visit_flws$Freq != 0), ]
+	ct3$tot_visit_flws <- visit_flws$Freq
+	ct3$shared_case <- ifelse(ct3$tot_visit_flws > 1, 1, 0) # DUMMY INDICATING IF A CASE IS SHARED AMONG FLWS
+	temp3 <- freq_per_flw[order(freq_per_flw$caseid, -freq_per_flw$Freq), ] # SORTING IS ASCENDING BY DEFAULT
+	temp4 <- duplicated(temp3$caseid)
+	flw.primary <- temp3[which(temp4 != TRUE), ]
+	flw.primary <- flw.primary[order(flw.primary$caseid), ] # THIS RETURNS THE FLW WITH MOST VISITS TO A GIVEN CASE
+	casetable <- merge(ct3, flw.primary, by = "caseid")
+	names(casetable)[11:12] <- c("primary_flw", "tot_visits_primary_flw")
+	casetable <- casetable[, -6]
+	casetable$domain.index <- rep(x$domain.index[1], nrow(casetable))
+	return(casetable)
+})
+
+caseOut <- function(x) {
+	for (i in seq_along(x)) {
+		filename = paste("domain_", sep = "", x[[i]]$domain.index[1], ".csv")
+		write.csv(x[[i]], filename)
+	}
+}
+caseOut(c0) 
+
+# COMPUETE THE NUMBER OF CASES REGISTERED BY A GIVEN FLW, THE NUMBER OF CASES BEING FOLLOWED UP AFTER REGISTERED, ADD THE INDICATOR TO LIFETIME TABLE
+ncases <- lapply(c0, function(x) {
+	y1 <- as.data.frame(table(x$register_flw))
+	names(y1) <- c("flwid", "ncases_registered")
+	# x.s <- x[order(x$register_flw, x$caseid), ]
+	y2 <- aggregate(register_followup~register_flw, data = x, sum)
+	names(y2) <- c("flwid", "register_followup")
+	# merge_me <- list(y1, y2)
+	# y3 <- Reduce(function(...) merge(..., all=T), merge_me)
+	y3 <- merge(y1, y2, by = "flwid")
+	return(y3)
+})
+
+# ignore this part. doing this cuz R crashed when processing data beyond its memory. rebooted but lossing the file unsaved
+# file_dir <- "D:/Dropbox/Dropbox (Dimagi)/Dimagi/CommCare/CommCare Research/R analysis/visit_table"
+# filelist <- dir(file_dir, pattern = ".csv", recursive = TRUE, all.files = TRUE, full.names = TRUE) # form.raw already excluded demo_users etc
+# f1 <- lapply(filelist, read.csv)
+
+M <- list()
+merge_me <- list()
+mergeMe <- function(x1, x2){
+	for (i in seq_along(x1)) {
+		M[[i]] <- merge(x1[[i]], x2[[i]], by = "flwid")
+		# merge_me[[i]] <- list(x1[[i]], x2[[i]])
+		# M[[i]] <- Reduce(function(...) merge(..., all = T), merge_me[[i]])
+	}
+	return(M)
+}
+life <- mergeMe(f1, ncases) 
+life <- lapply(life, function(x) {
+	x$case_register_followup_rate <- paste(round(100*x$register_followup/x$ncases_registered, 2), "%", sep = "")
+	return(x)
+})
+
+lifeOut <- function(x) {
+	for (i in seq_along(x)) {
+		filename = paste("domain_", sep = "", x[[i]]$domain.index[1], ".csv")
+		write.csv(x[[i]], filename)
+	}
+}
+lifeOut(life) # separate flw tables finished here
+
+# adding domain index for monthly table computation
+for (i in seq_along(life)) {
+	life[[i]]$domain.index <- rep(i, nrow(life[[i]])) # adding domain index column
+}
+# merge
+merged <- do.call("rbind", life)
+write.csv(merged, "lifetime_merged.csv") 
+# remove flws with 0 complete calendar month
+rm_index <- which(merged$calendar_months_on_cc == 0) 
+merged_2 <- merged[-rm_index,]
+write.csv(merged_2, "lifetime_merged_2.csv")
