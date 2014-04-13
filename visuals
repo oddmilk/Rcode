@@ -1,0 +1,31 @@
+# append lists by domain for visuals
+setwd("D:/Dropbox/Dropbox (Dimagi)/R analysis/tables/visual_monthly")
+file_dir <- ("D:/Dropbox/Dropbox (Dimagi)/R analysis/tables/monthly_table_temp")
+filelist <- dir(file_dir, pattern = ".csv", recursive = TRUE, all.files = TRUE, full.names = TRUE)
+mt <- lapply(filelist, read.csv)
+mt_merged <- do.call("rbind", mt)
+mt_merged <- mt_merged[, c(4, 3, 10, 34, 35, 5:9, 11:33, 36:38)]
+mt_per_dm <- split(mt_merged, mt_merged$domain.index) # this returns a list of dataframes for each domain that has flw with at least one full calendar month on their CC lifetime
+	# or use data.table() when levels increase since split would be slow
+setwd("D:/Dropbox/Dropbox (Dimagi)/R analysis/tables/monthly_table_per_domain")
+monthlyPerDomainOut <- function(x) {
+	for (i in seq_along(x)) {
+		filename = paste("domain_", x[[i]]$domain.index[1], sep = "", ".csv")
+		write.csv(x[[i]], filename)
+	}
+}
+monthlyPerDomainOut(mt_per_dm)
+
+## work off list mt_per_dm & produce monthly trend of each flw in the same domain
+	## guide_legend to be hidden (overflowing for mvp domains since they have huge number of users)
+library(ggplot2)
+
+viz_per_dm <- lapply(mt_per_dm, function(x) {
+	x$month.index <- as.factor(as.yearmon(x$month.index))
+	for (i in 6:(length(x)-3)) { # let's hold on for the viz of outcome indicators for now
+		p <- ggplot(x[!is.na(colnames(x)[i]),], aes_string(x = colnames(x)[2], y = colnames(x)[i], color = colnames(x)[3])) +
+			geom_point(aes_string(size = colnames(x)[i])) + geom_line(aes_string(group = colnames(x)[3])) + theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.title=element_blank())
+		print(p)
+		ggsave(filename = paste("dm_", x$domain.index[1], "_", colnames(x)[i], sep = "", ".pdf"), plot = p)	
+	}
+})
