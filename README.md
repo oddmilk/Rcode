@@ -12,3 +12,7 @@ This repo stores R scripts used to
     - Monthly Table
 
 - develop analyses and visualizations for aggregated FLW Summary Table
+
+Data Source: Raw data pulled using the data API 
+
+Version: 06/06/2014, CHIA
