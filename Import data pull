@@ -1,0 +1,23 @@
+# Load in packages that will be used throughout the process
+library(timeDate)
+library(gdata)
+library(plyr)
+library(zoo)
+
+# Set working directory to the one where you want to keep all generated output
+setwd("F:/Dropbox (Dimagi)/Output")
+
+# Bulk import raw data from # project domains in list
+file_dir <- "F:/Dropbox (Dimagi)/Input" 
+filelist <- dir(file_dir, pattern = ".csv", recursive = TRUE, all.files = TRUE, full.names = TRUE) 
+f <- lapply(filelist, read.csv, header = TRUE)
+
+# Subset raw data 
+subset_vars <- c("domain", "caseid", "flwid", "starttime", "endtime")
+for (i in seq_along(f)) {
+  names(f)[i] <- paste(as.character(f[[i]]$domain[1]))
+  f[[i]] <- f[[i]][subset_vars] # Think this step could be skipped based on what we get and what type of analysis is requested
+  f[[i]]$domain.index <- rep(i, nrow(f[[i]]))  # Add domain index to each data frame for further index use when they get merged into one big file
+}
+
+f_merged <- do.call("rbind", f)
