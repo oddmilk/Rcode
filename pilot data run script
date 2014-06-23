@@ -5,13 +5,14 @@
 
 # import visit table in csv format
 setwd("/output/.") # Melissa to update the data source
-v <- read.csv("visit_table_sample (1).csv", header = TRUE)
+v <- read.csv("visit_table_sample (1).csv", header = TRUE, stringsAsFactors = FALSE)
 
 # install/import libraries 
 library(zoo)
 library(digest)
 library(plyr)
 library(timeDate)
+library(reshape2)
 
 # update timedate format (importing data from csv automatically makes it into factor variable in R)
 v$time_start <- as.POSIXct(as.character(levels(v$time_start)), format = "%Y-%m-%d %H:%M:%S")[v$time_start]
@@ -28,7 +29,6 @@ v0 <- v[which(v$user_id != "demo_user"),]
 v0$user_id <- factor(v0$user_id)
 
 # split into a list of data frames to operate
-library(plyr)
 v1 <- dlply(v0, .(domain))
 
 for (i in seq_along(v1)) {
@@ -74,16 +74,6 @@ v3 <- lapply(v2, function(x){
   return(y1_aggr) # this would be an indicator for flw lifetime and monthly table
 })
 
-
-
-#export output
-visitOut <- function(x) {
-  for (i in seq_along(x)) {
-    filename = paste("visit_table_domain_", sep = "", i, ".csv")
-    write.csv(x[[i]], filename)
-  }
-}
-visitOut(v2) 
 
 
 # compute user indexed table
@@ -226,6 +216,20 @@ merge_me <- list(f1, avg.cases, reshaped_visit_time)
 f2 <- Reduce(function(...) merge(..., all=T), merge_me)
 f2$case_followup_rate <- round(f2$follow_up/f2$new_cases, 2)
 
+
+#export visit table output
+visitOut <- function(x) {
+  for (i in seq_along(x)) {
+    filename[i] = paste("visit_", sep = "", x[[i]]$domain.name[1], ".csv")
+    write.csv(x[[i]], filename[i])
+  }
+}
+
+mainDir <- "~"
+subDir <- "outputDir"
+dir.create(file.path(,mainDir, subDir)) 
+visitOut(v2) 
+
 # export lifetime table to relative directory
 lifeOut <- function(x) {
   for (i in seq_along(x)) {
@@ -334,7 +338,7 @@ m1 <- lapply(user_list_1, function(x){
   names(y10) <- c("month.index", "median_visits_per_active_day")
   y10$month.index <- as.factor(y10$month.index)
   y11 <- aggregate(form_duration~month.index, data = x, median)
-  names(y11) <- c("month.index", "median_visit_duration")
+  names(y11) <- c("month.index", "median_rvisit_duration")
   y11$month.index <- as.factor(y11$month.index)
   y11$median_visit_duration <- round(y11$median_visit_duration/60, 2)
   
@@ -355,4 +359,4 @@ monthly <- lapply(monthly_table, function(x){x[!duplicated(lapply(x, digest))]})
 monthly_merge <- do.call("rbind.fill", monthly)
 write.csv(monthly_merge, "monthly_merge.csv") # this keeps the monthly table output into wherever the working directory of R session is
 
-# Rashmi: retention report
+# Rashmi: attrition report
