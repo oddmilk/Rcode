@@ -351,5 +351,8 @@ m1 <- lapply(user_list_1, function(x){
 
 # join data frames in M and M1. This returns the monthly table for each user throughout their lifetime on CommCare
 monthly_table <- Reduce(function(x,y) Map(cbind, x, y),list(m, m1)) # this does not filter out any flw with only a few visits in one incomplete calendar month
+monthly <- lapply(monthly_table, function(x){x[!duplicated(lapply(x, digest))]})
+monthly_merge <- do.call("rbind.fill", monthly)
+write.csv(monthly_merge, "monthly_merge.csv") # this keeps the monthly table output into wherever the working directory of R session is
 
 # Rashmi: retention report
