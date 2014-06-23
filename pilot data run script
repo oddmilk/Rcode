@@ -217,27 +217,6 @@ f2 <- Reduce(function(...) merge(..., all=T), merge_me)
 f2$case_followup_rate <- round(f2$follow_up/f2$new_cases, 2)
 
 
-#export visit table output
-visitOut <- function(x) {
-  for (i in seq_along(x)) {
-    filename[i] = paste("visit_", sep = "", x[[i]]$domain.name[1], ".csv")
-    write.csv(x[[i]], filename[i])
-  }
-}
-
-mainDir <- "~"
-subDir <- "outputDir"
-dir.create(file.path(,mainDir, subDir)) 
-visitOut(v2) 
-
-# export lifetime table to relative directory
-lifeOut <- function(x) {
-  for (i in seq_along(x)) {
-    filename = paste("domain_", sep = "", x[[i]]$domain.index[1], ".csv")
-    write.csv(x[[i]], filename)
-  }
-}
-lifeOut(f2) 
 
 
 ######################################
@@ -357,6 +336,41 @@ m1 <- lapply(user_list_1, function(x){
 monthly_table <- Reduce(function(x,y) Map(cbind, x, y),list(m, m1)) # this does not filter out any flw with only a few visits in one incomplete calendar month
 monthly <- lapply(monthly_table, function(x){x[!duplicated(lapply(x, digest))]})
 monthly_merge <- do.call("rbind.fill", monthly)
+
+
+
+#################################
+mainDir <- "~"
+subDir0 <- "monthly"
+dir.create(file.path(mainDir, subDir0))
+setwd(file.path(mainDir, subDir0))
 write.csv(monthly_merge, "monthly_merge.csv") # this keeps the monthly table output into wherever the working directory of R session is
+
+#export visit table output
+subDir1 <- "visit"
+dir.create(file.path(mainDir, subDir1))
+setwd(file.path(mainDir, subDir1))
+visitOut <- function(x) {
+  for (i in seq_along(x)) {
+    filename[i] <- paste(x[[i]]$domain[1], sep = "", ".csv")
+    write.csv(x[[i]], filename[i])
+  }
+}
+visitOut(v2)
+
+
+# export lifetime table 
+subDir2 <- "lifetime"
+dir.create(file.path(mainDir, subDir2))
+setwd(file.path(mainDir, subDir2))
+
+lifeOut <- function(x) {
+  for (i in seq_along(x)) {
+    filename = paste("domain_", sep = "", x[[i]]$domain.index[1], ".csv")
+    write.csv(x[[i]], filename)
+  }
+}
+lifeOut(f2) 
+
 
 # Rashmi: attrition report
