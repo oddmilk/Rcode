@@ -5,7 +5,7 @@
 
 # import visit table in csv format
 setwd("/output/.") # Melissa to update the data source
-v <- read.csv("visit_table_sample (1).csv", header = TRUE, stringsAsFactors = FALSE)
+v <- read.csv("visit_table_sample (1).csv", header = TRUE)
 
 # install/import libraries 
 library(zoo)
