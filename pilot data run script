@@ -2,7 +2,7 @@
 #######################
 # import visit table in csv format
 setwd("/output/.") # Melissa to update the data source
-v <- read.csv("interaction_table_sample2.csv", header = TRUE)
+v <- read.csv("visit_table_sample (1).csv", header = TRUE)
 # install/import libraries 
 library(zoo)
 library(digest)
@@ -21,25 +21,42 @@ v$related[related_cases_index_child] <- "Yes" # this flags all multiple-case vis
 # remove demo_user
 v0 <- v[which(v$user_id != "demo_user"),]
 v0$user_id <- factor(v0$user_id)
+
+
 # split into a list of data frames to operate
-x <- x[order(x$user_id, x$time_start), ]
-x$date_difference <- c(NA, diff(x$visit_date)) # this examines if sorted visits happen in the same or different days
-x$time_since_previous[which(x$time_since_previous == "")] <- NA # this seems to be "NA" already if you import that in R in linux (not sure why it's missing here on Mac)
-x$visit_weekday <- as.numeric(format(x$visit_date, "%w"))
-x$time_since_previous <- as.numeric(x$time_since_previous)
-x$batch_entry <- ifelse(x$date_difference == 0 & x$time_since_previous < 600, 1, 0)  # time_since_previous is calculated in seconds
-x$time_ffs <- strftime(x$time_start, format = "%H:%M:%S")
-x$visit_hour <- strftime(x$time_start, format = "%H") # extract hour from time vector
-x$visit_time <- ifelse(x$time_ffs >= "06:00:00" & x$time_ffs < "12:00:00", "morning", 
-                       ifelse(x$time_ffs >= "12:00:00" & x$time_ffs < "18:00:00", "afternoon",
-                              ifelse(x$time_ffs >= "18:00:00" & x$time_ffs < "24:00:00", "night", "after midnight")))
-x <- x[order(x$case_id, x$time_start), ]
-x$days_elapsed_case <- c(NA, as.numeric(diff(x$visit_date, units = "days")))
-x$days_elapsed_case[which(diff(as.numeric(factor(x$case_id, ordered = TRUE))) != 0) + 1] <- NA # flagged child_case visits are excluded from calculation
-x$days_elapsed_case[1] <- NA
-x$new_case <- ifelse(is.na(x$days_elapsed_case) == TRUE, 1, 0) # this flags all visits registering a new case
-x$follow_up <- ifelse(is.na(x$days_elapsed_case) == FALSE, 1, 0) # likewise, flagging all followup visits
-return(x)
+# split into a list of data frames to operate
+library(plyr)
+v1 <- dlply(v0, .(domain))
+
+for (i in seq_along(v1)) {
+  v1[[i]]$domain.index <- i 
+} # assign domain index 
+
+# operate on list of data frames
+v2 <- lapply(v1, function(x){
+  nvisits_raw <- as.data.frame(table(x$user_id)) 
+  nvisits_raw <- nvisits_raw[order(nvisits_raw$Var1), ]
+  user_remove <- nvisits_raw$Var1[which(nvisits_raw$Freq == 1)] # this returns user_id with only one visit in their whole CC lifecycle
+  x <- x[!x$user_id %in% user_remove,] # this removes users who have been active only for once in their CC lifecycle
+  x$user_id <- factor(x$user_id)
+  x <- x[order(x$user_id, x$time_start), ]
+  x$date_difference <- c(NA, diff(x$visit_date)) # this examines if sorted visits happen in the same or different days
+  x$time_since_previous[which(x$time_since_previous == "")] <- NA # this seems to be "NA" already if you import that in R in linux (not sure why it's missing here on Mac)
+  x$visit_weekday <- as.numeric(format(x$visit_date, "%w"))
+  x$time_since_previous <- as.numeric(x$time_since_previous)
+  x$batch_entry <- ifelse(x$date_difference == 0 & x$time_since_previous < 600, 1, 0)  # time_since_previous is calculated in seconds
+  x$time_ffs <- strftime(x$time_start, format = "%H:%M:%S")
+  x$visit_hour <- strftime(x$time_start, format = "%H") # extract hour from time vector
+  x$visit_time <- ifelse(x$time_ffs >= "06:00:00" & x$time_ffs < "12:00:00", "morning", 
+                         ifelse(x$time_ffs >= "12:00:00" & x$time_ffs < "18:00:00", "afternoon",
+                                ifelse(x$time_ffs >= "18:00:00" & x$time_ffs < "24:00:00", "night", "after midnight")))
+  x <- x[order(x$case_id, x$time_start), ]
+  x$days_elapsed_case <- c(NA, as.numeric(diff(x$visit_date, units = "days")))
+  x$days_elapsed_case[which(diff(as.numeric(factor(x$case_id, ordered = TRUE))) != 0) + 1] <- NA # flagged child_case visits are excluded from calculation
+  x$days_elapsed_case[1] <- NA
+  x$new_case <- ifelse(is.na(x$days_elapsed_case) == TRUE, 1, 0) # this flags all visits registering a new case
+  x$follow_up <- ifelse(is.na(x$days_elapsed_case) == FALSE, 1, 0) # likewise, flagging all followup visits
+  return(x)
 })
 # this computes average number of cases visited in an hour for each domain, will be added to user-indexed lifetime table later
 v3 <- lapply(v2, function(x){
