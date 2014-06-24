@@ -304,7 +304,7 @@ m1 <- lapply(user_list_1, function(x){
   names(y10) <- c("month.index", "median_visits_per_active_day")
   y10$month.index <- as.factor(y10$month.index)
   y11 <- aggregate(form_duration~month.index, data = x, median)
-  names(y11) <- c("month.index", "median_rvisit_duration")
+  names(y11) <- c("month.index", "median_visit_duration")
   y11$month.index <- as.factor(y11$month.index)
   y11$median_visit_duration <- round(y11$median_visit_duration/60, 2)
   
