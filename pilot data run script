@@ -353,7 +353,7 @@ setwd(file.path(mainDir, subDir2))
 
 lifeOut <- function(x) {
   for (i in seq_along(x)) {
-    filename[i] = paste("domain_", sep = "", x[[i]]$domain.index[1], ".csv")
+    filename[i] = paste(x[[i]]$domain.name[1], ".csv")
     write.csv(x[[i]], filename[i])
   }
 }
