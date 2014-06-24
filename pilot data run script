@@ -2,7 +2,7 @@
 #######################
 # import visit table in csv format
 setwd("/output/.") # Melissa to update the data source
-v <- read.csv("visit_table_sample (1).csv", header = TRUE)
+v <- read.csv("interaction_table_sample2.csv", header = TRUE)
 # install/import libraries 
 library(zoo)
 library(digest)
