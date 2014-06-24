@@ -5,7 +5,7 @@
 
 # import visit table in csv format
 setwd("/output/.") # Melissa to update the data source
-v <- read.csv("visit_table_sample (1).csv", header = TRUE)
+v <- read.csv("interaction_table_sample2.csv", header = TRUE)
 
 # install/import libraries 
 library(zoo)
@@ -29,6 +29,19 @@ v0 <- v[which(v$user_id != "demo_user"),]
 v0$user_id <- factor(v0$user_id)
 
 # split into a list of data frames to operate
+v1 <- dlply(v0, .(domain))
+
+for (i in seq_along(v1)) {
+  v1[[i]]$domain.index <- i 
+} # assign domain index 
+
+# operate on list of data frames
+v2 <- lapply(v1, function(x){
+  nvisits_raw <- as.data.frame(table(x$user_id)) 
+  nvisits_raw <- nvisits_raw[order(nvisits_raw$Var1), ]
+  user_remove <- nvisits_raw$Var1[which(nvisits_raw$Freq == 1)] # this ret  urns user_id with only one visit in their whole CC lifecycle
+  x <- x[!x$user_id %in% user_remove,] # this removes users who have been active only for once in their CC lifecycle
+  x$user_id <- factor(x$user_id)
   x <- x[order(x$user_id, x$time_start), ]
   x$date_difference <- c(NA, diff(x$visit_date)) # this examines if sorted visits happen in the same or different days
   x$time_since_previous[which(x$time_since_previous == "")] <- NA # this seems to be "NA" already if you import that in R in linux (not sure why it's missing here on Mac)
@@ -327,7 +340,7 @@ monthly_merge <- do.call("rbind.fill", monthly)
 
 
 #################################
-mainDir <- "~"
+mainDir <- getwd()
 subDir0 <- "monthly"
 dir.create(file.path(mainDir, subDir0))
 setwd(file.path(mainDir, subDir0))
