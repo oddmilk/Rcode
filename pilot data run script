@@ -2,7 +2,7 @@
 #######################
 # import visit table in csv format
 setwd("/output/.") # Melissa to update the data source
-v <- read.csv("visit_table_sample (1).csv", header = TRUE)
+v <- read.csv("interaction_table_sample2.csv", header = TRUE)
 # install/import libraries 
 library(zoo)
 library(digest)
@@ -30,6 +30,7 @@ v1 <- dlply(v0, .(domain))
 
 for (i in seq_along(v1)) {
   v1[[i]]$domain.index <- i 
+  v1[[i]]$domain <- names(v1[i])
 } # assign domain index 
 
 # operate on list of data frames
@@ -317,8 +318,8 @@ dir.create(file.path(mainDir, subDir1))
 setwd(file.path(mainDir, subDir1))
 visitOut <- function(x) {
   for (i in seq_along(x)) {
-    filename[i] <- paste(x[[i]]$domain[1], sep = "", ".csv")
-    write.csv(x[[i]], filename[i])
+    filename <- paste(x[[i]]$domain[1], sep = "", ".csv")
+    write.csv(x[[i]], filename)
   }
 }
 visitOut(v2)
@@ -330,8 +331,8 @@ lifetime.split <- split(f2, f2$domain.name)
 
 lifeOut <- function(x) {
   for (i in seq_along(x)) {
-    filename[i] = paste(x[[i]]$domain.name[1], ".csv")
-    write.csv(x[[i]], filename[i])
+    filename <- paste(x[[i]]$domain.name[1], sep = "", ".csv")
+    write.csv(x[[i]], filename)
   }
 }
 lifeOut(lifetime.split) 
