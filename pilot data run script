@@ -13,8 +13,6 @@ library(reshape2)
 v$visit_date <- as.Date(v$time_start)
 v$month.index <- as.yearmon(v$visit_date) # obtaining year and month from Date
 
-# SHOULD ADD ANOTHER FIELD REPLACING THE INDEX OF MONTH PER REQUEST 
-
 # remove demo_user
 v0 <- v[which(v$user_id != "demo_user"),]
 v0$user_id <- factor(v0$user_id)
